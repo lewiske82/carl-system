@@ -1,0 +1,474 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+/**
+ * ═══════════════════════════════════════════════════════════════
+ * DIGITÁLIS FORINT (DFt) - Deflácios Magyar Állami Token
+ * ═══════════════════════════════════════════════════════════════
+ * 
+ * Jellemzők:
+ * - 5% éves defláció (burn mechanizmus)
+ * - Környezeti bónusz rendszer
+ * - Pontgyűjtés integráció
+ * - Kibocsátás stabilitás
+ */
+contract DigitalisForint is ERC20, Ownable, ReentrancyGuard {
+    
+    // Konstansok
+    uint256 public constant DEFLATION_RATE = 500; // 5% (basis points: 500/10000)
+    uint256 public constant ANNUAL_BURN_INTERVAL = 365 days;
+    uint256 public constant GREEN_BONUS_MULTIPLIER = 110; // 10% bónusz
+    
+    // State változók
+    uint256 public lastDeflationTimestamp;
+    uint256 public totalBurned;
+    mapping(address => uint256) public pointsBalance;
+    mapping(address => bool) public authorizedBurners;
+    mapping(address => GreenActivity) public greenActivities;
+    
+    struct GreenActivity {
+        uint256 recyclingCount;
+        uint256 lastActivityTimestamp;
+        uint256 totalGreenBonus;
+    }
+    
+    // Events
+    event TokensBurned(address indexed from, uint256 amount, string reason);
+    event DeflationExecuted(uint256 burnedAmount, uint256 timestamp);
+    event PointsAwarded(address indexed user, uint256 points, string reason);
+    event GreenBonusAwarded(address indexed user, uint256 bonus);
+    
+    constructor() ERC20("Digitalis Forint", "DFt") {
+        lastDeflationTimestamp = block.timestamp;
+        
+        // Kezdeti kibocsátás: 100 millió DFt
+        _mint(msg.sender, 100_000_000 * 10**decimals());
+        
+        // Tulajdonos automatikusan authorized burner
+        authorizedBurners[msg.sender] = true;
+    }
+    
+    /**
+     * Deflácios burn mechanizmus - évente 5%
+     * Csak owner vagy automatizált scheduler hívhatja
+     */
+    function executeAnnualDeflation() external onlyOwner {
+        require(
+            block.timestamp >= lastDeflationTimestamp + ANNUAL_BURN_INTERVAL,
+            "Deflation interval not reached"
+        );
+        
+        uint256 currentSupply = totalSupply();
+        uint256 burnAmount = (currentSupply * DEFLATION_RATE) / 10000;
+        
+        _burn(address(this), burnAmount);
+        totalBurned += burnAmount;
+        lastDeflationTimestamp = block.timestamp;
+        
+        emit DeflationExecuted(burnAmount, block.timestamp);
+    }
+    
+    /**
+     * Tranzakciós burn - minden tranzakció után kis % burn
+     */
+    function _transfer(
+        address from,
+        address to,
+        uint256 amount
+    ) internal virtual override {
+        // 0.1% burn minden tranzakcióból
+        uint256 burnAmount = (amount * 10) / 10000;
+        uint256 transferAmount = amount - burnAmount;
+        
+        if (burnAmount > 0) {
+            super._transfer(from, address(0), burnAmount);
+            totalBurned += burnAmount;
+            emit TokensBurned(from, burnAmount, "Transaction burn");
+        }
+        
+        super._transfer(from, to, transferAmount);
+    }
+    
+    /**
+     * Pontok -> DFt konverzió
+     * 100 pont = 1 DFt
+     */
+    function redeemPoints(uint256 points) external nonReentrant {
+        require(pointsBalance[msg.sender] >= points, "Insufficient points");
+        require(points >= 100, "Minimum 100 points required");
+        
+        uint256 dftAmount = (points / 100) * 10**decimals();
+        pointsBalance[msg.sender] -= points;
+        
+        _mint(msg.sender, dftAmount);
+    }
+    
+    /**
+     * Pontok jutalmazása (csak authorized burners)
+     */
+    function awardPoints(
+        address user,
+        uint256 points,
+        string memory reason
+    ) external {
+        require(authorizedBurners[msg.sender], "Not authorized");
+        
+        pointsBalance[user] += points;
+        emit PointsAwarded(user, points, reason);
+    }
+    
+    /**
+     * Környezeti bónusz (újrahasznosítás, zöld tevékenység)
+     */
+    function recordGreenActivity(address user) external {
+        require(authorizedBurners[msg.sender], "Not authorized");
+        
+        GreenActivity storage activity = greenActivities[user];
+        activity.recyclingCount++;
+        activity.lastActivityTimestamp = block.timestamp;
+        
+        // 50 pont + 10% DFt bónusz
+        pointsBalance[user] += 50;
+        
+        uint256 bonus = (balanceOf(user) * (GREEN_BONUS_MULTIPLIER - 100)) / 100;
+        if (bonus > 0) {
+            _mint(user, bonus);
+            activity.totalGreenBonus += bonus;
+            emit GreenBonusAwarded(user, bonus);
+        }
+    }
+    
+    /**
+     * Authorized burners kezelése
+     */
+    function setAuthorizedBurner(address burner, bool status) external onlyOwner {
+        authorizedBurners[burner] = status;
+    }
+    
+    /**
+     * View funkciók
+     */
+    function getPointsBalance(address user) external view returns (uint256) {
+        return pointsBalance[user];
+    }
+    
+    function getGreenActivityStats(address user) external view returns (
+        uint256 recyclingCount,
+        uint256 lastActivity,
+        uint256 totalBonus
+    ) {
+        GreenActivity memory activity = greenActivities[user];
+        return (
+            activity.recyclingCount,
+            activity.lastActivityTimestamp,
+            activity.totalGreenBonus
+        );
+    }
+}
+
+
+/**
+ * ═══════════════════════════════════════════════════════════════
+ * SOULBOUND NFT - Nem átruházható Magyar Szív Kártya Token
+ * ═══════════════════════════════════════════════════════════════
+ * 
+ * ERC-5192 szabvány: Soulbound (lelkéhez kötött) token
+ * Funkciók:
+ * - Személyhez kötött, nem átruházható
+ * - Öröklési logika (végrendelet)
+ * - Szerzői jogi információk tárolása
+ * - Biometrikus hash-ek linkelése
+ */
+contract MagyarSzivKartya is ERC721, Ownable {
+    
+    // Soulbound jelölés
+    bool public constant IS_SOULBOUND = true;
+    
+    struct CardMetadata {
+        string cardNumber;          // UUID
+        bytes32 voiceHash;          // Hang fingerprint hash
+        bytes32 faceHash;           // Arc template hash
+        uint256 issueDate;
+        bool isActive;
+        address inheritanceAddress; // Örökléshez
+        ContentRights contentRights;
+    }
+    
+    struct ContentRights {
+        bool voiceLicensable;
+        bool faceLicensable;
+        uint256 royaltyPercentage;  // Basis points (pl. 1500 = 15%)
+        mapping(address => LicenseTerms) activeLicenses;
+    }
+    
+    struct LicenseTerms {
+        bool isActive;
+        uint256 expiryDate;
+        uint256 royaltyRate;
+        string usageType; // "commercial", "personal", etc.
+    }
+    
+    // Storage
+    uint256 private _nextTokenId;
+    mapping(uint256 => CardMetadata) public cardMetadata;
+    mapping(address => uint256) public ownerToTokenId;
+    mapping(string => bool) public cardNumberExists;
+    
+    // Events
+    event CardIssued(address indexed owner, uint256 tokenId, string cardNumber);
+    event CardRevoked(uint256 tokenId, string reason);
+    event InheritanceSet(uint256 tokenId, address heir);
+    event LicenseGranted(uint256 tokenId, address licensee, string usageType);
+    
+    constructor() ERC721("Magyar Sziv Kartya", "MSK") {}
+    
+    /**
+     * Kártya kibocsátása (csak Government/Authorized entity)
+     */
+    function issueCard(
+        address recipient,
+        string memory cardNumber,
+        bytes32 voiceHash,
+        bytes32 faceHash
+    ) external onlyOwner returns (uint256) {
+        require(!cardNumberExists[cardNumber], "Card number already exists");
+        require(ownerToTokenId[recipient] == 0, "User already has a card");
+        
+        uint256 tokenId = _nextTokenId++;
+        _safeMint(recipient, tokenId);
+        
+        CardMetadata storage metadata = cardMetadata[tokenId];
+        metadata.cardNumber = cardNumber;
+        metadata.voiceHash = voiceHash;
+        metadata.faceHash = faceHash;
+        metadata.issueDate = block.timestamp;
+        metadata.isActive = true;
+        
+        ownerToTokenId[recipient] = tokenId;
+        cardNumberExists[cardNumber] = true;
+        
+        emit CardIssued(recipient, tokenId, cardNumber);
+        return tokenId;
+    }
+    
+    /**
+     * SOULBOUND: Transfer blokkolása
+     * Kivéve: öröklés esetén (külön függvény)
+     */
+    function _beforeTokenTransfer(
+        address from,
+        address to,
+        uint256 tokenId,
+        uint256 batchSize
+    ) internal virtual override {
+        require(
+            from == address(0) || to == address(0),
+            "Soulbound: Transfer not allowed"
+        );
+        super._beforeTokenTransfer(from, to, tokenId, batchSize);
+    }
+    
+    /**
+     * Öröklés beállítása (végrendelet)
+     */
+    function setInheritance(uint256 tokenId, address heir) external {
+        require(ownerOf(tokenId) == msg.sender, "Not card owner");
+        require(heir != address(0), "Invalid heir address");
+        
+        cardMetadata[tokenId].inheritanceAddress = heir;
+        emit InheritanceSet(tokenId, heir);
+    }
+    
+    /**
+     * Öröklés végrehajtása (halál esetén - csak owner/government)
+     */
+    function executeInheritance(uint256 tokenId) external onlyOwner {
+        CardMetadata storage metadata = cardMetadata[tokenId];
+        address heir = metadata.inheritanceAddress;
+        
+        require(heir != address(0), "No heir designated");
+        
+        // Régi kártya deaktiválása
+        metadata.isActive = false;
+        
+        // Új kártya kibocsátása örökösnek
+        // (A szerzői jogok átkerülnek)
+        string memory newCardNumber = string(
+            abi.encodePacked("INH-", metadata.cardNumber)
+        );
+        
+        issueCard(heir, newCardNumber, metadata.voiceHash, metadata.faceHash);
+    }
+    
+    /**
+     * Szerzői jogi licenc beállítása
+     */
+    function setContentRights(
+        uint256 tokenId,
+        bool voiceLicensable,
+        bool faceLicensable,
+        uint256 royaltyPercentage
+    ) external {
+        require(ownerOf(tokenId) == msg.sender, "Not card owner");
+        require(royaltyPercentage <= 10000, "Invalid royalty %");
+        
+        CardMetadata storage metadata = cardMetadata[tokenId];
+        metadata.contentRights.voiceLicensable = voiceLicensable;
+        metadata.contentRights.faceLicensable = faceLicensable;
+        metadata.contentRights.royaltyPercentage = royaltyPercentage;
+    }
+    
+    /**
+     * Licenc kiadása (pl. tartalomgyártónak)
+     */
+    function grantLicense(
+        uint256 tokenId,
+        address licensee,
+        uint256 duration,
+        string memory usageType
+    ) external {
+        require(ownerOf(tokenId) == msg.sender, "Not card owner");
+        
+        CardMetadata storage metadata = cardMetadata[tokenId];
+        LicenseTerms storage license = metadata.contentRights.activeLicenses[licensee];
+        
+        license.isActive = true;
+        license.expiryDate = block.timestamp + duration;
+        license.royaltyRate = metadata.contentRights.royaltyPercentage;
+        license.usageType = usageType;
+        
+        emit LicenseGranted(tokenId, licensee, usageType);
+    }
+    
+    /**
+     * Licenc ellenőrzése
+     */
+    function checkLicense(uint256 tokenId, address licensee) 
+        external 
+        view 
+        returns (bool isValid, uint256 expiryDate, uint256 royaltyRate) 
+    {
+        CardMetadata storage metadata = cardMetadata[tokenId];
+        LicenseTerms storage license = metadata.contentRights.activeLicenses[licensee];
+        
+        bool valid = license.isActive && block.timestamp < license.expiryDate;
+        return (valid, license.expiryDate, license.royaltyRate);
+    }
+    
+    /**
+     * Kártya információk lekérdezése
+     */
+    function getCardInfo(uint256 tokenId) external view returns (
+        string memory cardNumber,
+        bytes32 voiceHash,
+        bytes32 faceHash,
+        uint256 issueDate,
+        bool isActive,
+        address heir
+    ) {
+        CardMetadata storage metadata = cardMetadata[tokenId];
+        return (
+            metadata.cardNumber,
+            metadata.voiceHash,
+            metadata.faceHash,
+            metadata.issueDate,
+            metadata.isActive,
+            metadata.inheritanceAddress
+        );
+    }
+    
+    /**
+     * Kártya visszavonása (bűncselekmény, elvesztés esetén)
+     */
+    function revokeCard(uint256 tokenId, string memory reason) external onlyOwner {
+        cardMetadata[tokenId].isActive = false;
+        emit CardRevoked(tokenId, reason);
+    }
+}
+
+
+/**
+ * ═══════════════════════════════════════════════════════════════
+ * JOGDÍJ KEZELŐ - Royalty Manager Smart Contract
+ * ═══════════════════════════════════════════════════════════════
+ */
+contract RoyaltyManager is Ownable, ReentrancyGuard {
+    
+    DigitalisForint public dftToken;
+    MagyarSzivKartya public cardNFT;
+    
+    struct RoyaltyPayment {
+        uint256 amount;
+        uint256 timestamp;
+        address payer;
+        string contentId;
+    }
+    
+    mapping(address => RoyaltyPayment[]) public royaltyHistory;
+    mapping(address => uint256) public pendingRoyalties;
+    
+    event RoyaltyPaid(address indexed creator, uint256 amount, string contentId);
+    event RoyaltyWithdrawn(address indexed creator, uint256 amount);
+    
+    constructor(address _dftToken, address _cardNFT) {
+        dftToken = DigitalisForint(_dftToken);
+        cardNFT = MagyarSzivKartya(_cardNFT);
+    }
+    
+    /**
+     * Jogdíj fizetés tartalomhasználatért
+     */
+    function payRoyalty(
+        address creator,
+        uint256 amount,
+        string memory contentId
+    ) external nonReentrant {
+        require(amount > 0, "Invalid amount");
+        
+        // DFt transfer a fizetőtől
+        require(
+            dftToken.transferFrom(msg.sender, address(this), amount),
+            "Transfer failed"
+        );
+        
+        pendingRoyalties[creator] += amount;
+        
+        royaltyHistory[creator].push(RoyaltyPayment({
+            amount: amount,
+            timestamp: block.timestamp,
+            payer: msg.sender,
+            contentId: contentId
+        }));
+        
+        emit RoyaltyPaid(creator, amount, contentId);
+    }
+    
+    /**
+     * Jogdíj kifizetés kérése
+     */
+    function withdrawRoyalties() external nonReentrant {
+        uint256 amount = pendingRoyalties[msg.sender];
+        require(amount > 0, "No pending royalties");
+        
+        pendingRoyalties[msg.sender] = 0;
+        require(dftToken.transfer(msg.sender, amount), "Transfer failed");
+        
+        emit RoyaltyWithdrawn(msg.sender, amount);
+    }
+    
+    /**
+     * Jogdíj előzmények lekérdezése
+     */
+    function getRoyaltyHistory(address creator) 
+        external 
+        view 
+        returns (RoyaltyPayment[] memory) 
+    {
+        return royaltyHistory[creator];
+    }
+}

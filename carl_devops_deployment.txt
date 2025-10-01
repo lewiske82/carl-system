@@ -1,0 +1,729 @@
+# ═══════════════════════════════════════════════════════════════
+# CARL DevOps & Deployment Configuration
+# Docker Compose + Kubernetes + CI/CD
+# Version: 0.1.0-beta
+# ═══════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────
+# docker-compose.yml - Local Development
+# ───────────────────────────────────────────────────────────────
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: carl-postgres
+    environment:
+      POSTGRES_DB: carl_db
+      POSTGRES_USER: carl_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U carl_user -d carl_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - carl-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: carl-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - carl-network
+
+  # MongoDB (for unstructured data)
+  mongodb:
+    image: mongo:6
+    container_name: carl-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: carl_admin
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+      MONGO_INITDB_DATABASE: carl_logs
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - carl-network
+
+  # CARL AI Engine (Python)
+  carl-ai:
+    build:
+      context: ./carl-ai
+      dockerfile: Dockerfile
+    container_name: carl-ai-engine
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=carl_db
+      - POSTGRES_USER=carl_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - MODEL_PATH=/models
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/models
+      - ai_cache:/app/cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - carl-network
+
+  # Backend API (Node.js)
+  carl-backend:
+    build:
+      context: ./carl-backend
+      dockerfile: Dockerfile
+    container_name: carl-backend-api
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=carl_db
+      - POSTGRES_USER=carl_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - JWT_SECRET=${JWT_SECRET}
+      - BLOCKCHAIN_RPC_URL=${BLOCKCHAIN_RPC_URL}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      carl-ai:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - carl-network
+
+  # Blockchain Service (Hardhat node for development)
+  blockchain-node:
+    image: ethereum/client-go:stable
+    container_name: carl-blockchain-node
+    command: 
+      - "--dev"
+      - "--http"
+      - "--http.addr=0.0.0.0"
+      - "--http.corsdomain=*"
+    ports:
+      - "8545:8545"
+    networks:
+      - carl-network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: carl-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - carl-backend
+      - carl-ai
+    networks:
+      - carl-network
+
+  # Prometheus Monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: carl-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - carl-network
+
+  # Grafana Dashboard
+  grafana:
+    image: grafana/grafana:latest
+    container_name: carl-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+    depends_on:
+      - prometheus
+    networks:
+      - carl-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  mongodb_data:
+  ai_cache:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  carl-network:
+    driver: bridge
+
+---
+# ───────────────────────────────────────────────────────────────
+# kubernetes/namespace.yaml
+# ───────────────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: carl-system
+  labels:
+    name: carl-system
+    project: magyar-sziv-kartya
+
+---
+# ───────────────────────────────────────────────────────────────
+# kubernetes/configmap.yaml
+# ───────────────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: carl-config
+  namespace: carl-system
+data:
+  POSTGRES_DB: "carl_db"
+  POSTGRES_USER: "carl_user"
+  REDIS_HOST: "carl-redis-service"
+  POSTGRES_HOST: "carl-postgres-service"
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"
+
+---
+# ───────────────────────────────────────────────────────────────
+# kubernetes/secrets.yaml (Base64 encoded)
+# ───────────────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: carl-secrets
+  namespace: carl-system
+type: Opaque
+data:
+  postgres-password: Y2FybF9wYXNzd29yZF9jaGFuZ2VfbWU=  # base64 encoded
+  redis-password: cmVkaXNfcGFzc3dvcmRfY2hhbmdlX21l
+  jwt-secret: and0X3NlY3JldF9rZXlfY2hhbmdlX21l
+  blockchain-key: YmxvY2tjaGFpbl9wcml2YXRlX2tleV9oZXJl
+
+---
+# ───────────────────────────────────────────────────────────────
+# kubernetes/postgres-deployment.yaml
+# ───────────────────────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: carl-postgres
+  namespace: carl-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: carl-postgres
+  template:
+    metadata:
+      labels:
+        app: carl-postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: carl-config
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: carl-config
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: carl-secrets
+              key: postgres-password
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+      volumes:
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: postgres-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: carl-postgres-service
+  namespace: carl-system
+spec:
+  selector:
+    app: carl-postgres
+  ports:
+  - protocol: TCP
+    port: 5432
+    targetPort: 5432
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: carl-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+# ───────────────────────────────────────────────────────────────
+# kubernetes/carl-backend-deployment.yaml
+# ───────────────────────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: carl-backend
+  namespace: carl-system
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: carl-backend
+  template:
+    metadata:
+      labels:
+        app: carl-backend
+    spec:
+      containers:
+      - name: carl-backend
+        image: carlhub/carl-backend:v0.1.0-beta
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "3000"
+        - name: POSTGRES_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: carl-config
+              key: POSTGRES_HOST
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: carl-secrets
+              key: postgres-password
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: carl-secrets
+              key: jwt-secret
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: carl-backend-service
+  namespace: carl-system
+spec:
+  selector:
+    app: carl-backend
+  ports:
+  - protocol: TCP
+    port: 3000
+    targetPort: 3000
+  type: LoadBalancer
+
+---
+# ───────────────────────────────────────────────────────────────
+# kubernetes/carl-ai-deployment.yaml
+# ───────────────────────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: carl-ai
+  namespace: carl-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: carl-ai
+  template:
+    metadata:
+      labels:
+        app: carl-ai
+    spec:
+      containers:
+      - name: carl-ai
+        image: carlhub/carl-ai-engine:v0.1.0-beta
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+            nvidia.com/gpu: 1  # GPU support for AI models
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+            nvidia.com/gpu: 1
+        volumeMounts:
+        - name: models
+          mountPath: /models
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: ai-models-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: carl-ai-service
+  namespace: carl-system
+spec:
+  selector:
+    app: carl-ai
+  ports:
+  - protocol: TCP
+    port: 8000
+    targetPort: 8000
+  type: ClusterIP
+
+---
+# ───────────────────────────────────────────────────────────────
+# kubernetes/ingress.yaml
+# ───────────────────────────────────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: carl-ingress
+  namespace: carl-system
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+  - hosts:
+    - api.magyarszivcartya.hu
+    - carl.magyarszivcartya.hu
+    secretName: carl-tls-secret
+  rules:
+  - host: api.magyarszivcartya.hu
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: carl-backend-service
+            port:
+              number: 3000
+  - host: carl.magyarszivcartya.hu
+    http:
+      paths:
+      - path: /ai
+        pathType: Prefix
+        backend:
+          service:
+            name: carl-ai-service
+            port:
+              number: 8000
+
+---
+# ───────────────────────────────────────────────────────────────
+# kubernetes/hpa.yaml - Horizontal Pod Autoscaler
+# ───────────────────────────────────────────────────────────────
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: carl-backend-hpa
+  namespace: carl-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: carl-backend
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# ───────────────────────────────────────────────────────────────
+# .github/workflows/ci-cd.yml - GitHub Actions
+# ───────────────────────────────────────────────────────────────
+
+name: CARL CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: carl-backend
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: carl_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    
+    - name: Install dependencies
+      run: |
+        cd carl-backend
+        npm ci
+    
+    - name: Run tests
+      run: |
+        cd carl-backend
+        npm test
+    
+    - name: Run linter
+      run: |
+        cd carl-backend
+        npm run lint
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Log in to Container Registry
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: ./carl-backend
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ github.repository }}/carl-backend:latest
+          ${{ env.REGISTRY }}/${{ github.repository }}/carl-backend:${{ github.sha }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+    
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBECONFIG }}" | base64 -d > kubeconfig
+        export KUBECONFIG=./kubeconfig
+    
+    - name: Deploy to Kubernetes
+      run: |
+        kubectl apply -f kubernetes/
+        kubectl rollout status deployment/carl-backend -n carl-system
+
+---
+# ───────────────────────────────────────────────────────────────
+# Dockerfile - Backend (Node.js)
+# ───────────────────────────────────────────────────────────────
+
+# Multi-stage build
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --only=production
+
+COPY . .
+RUN npm run build
+
+# Production image
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Security: non-root user
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S nodejs -u 1001
+
+COPY --from=builder --chown=nodejs:nodejs /app/dist ./dist
+COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=nodejs:nodejs /app/package.json ./
+
+USER nodejs
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=40s \
+  CMD node -e "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
+
+CMD ["node", "dist/index.js"]
+
+---
+# ───────────────────────────────────────────────────────────────
+# Makefile - Deployment Commands
+# ───────────────────────────────────────────────────────────────
+
+.PHONY: help dev prod deploy clean
+
+help:
+	@echo "CARL Deployment Commands"
+	@echo "------------------------"
+	@echo "make dev       - Start development environment"
+	@echo "make prod      - Start production environment"
+	@echo "make deploy    - Deploy to Kubernetes"
+	@echo "make clean     - Clean up containers"
+
+dev:
+	docker-compose up -d
+	@echo "✅ Development environment started"
+	@echo "Backend: http://localhost:3000"
+	@echo "AI Engine: http://localhost:8000"
+
+prod:
+	docker-compose -f docker-compose.prod.yml up -d
+	@echo "✅ Production environment started"
+
+deploy:
+	kubectl apply -f kubernetes/namespace.yaml
+	kubectl apply -f kubernetes/configmap.yaml
+	kubectl apply -f kubernetes/secrets.yaml
+	kubectl apply -f kubernetes/
+	@echo "✅ Deployed to Kubernetes"
+
+clean:
+	docker-compose down -v
+	@echo "✅ Cleaned up containers"
+
+---
+# ═══════════════════════════════════════════════════════════════
+# END OF DEVOPS CONFIGURATION
+# ═══════════════════════════════════════════════════════════════

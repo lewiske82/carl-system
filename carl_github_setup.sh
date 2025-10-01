@@ -8,8 +8,8 @@
 set -e  # Exit on error
 
 PROJECT_NAME="carl-magyar-sziv-kartya"
-GITHUB_USERNAME="lewiske82"  
-GITHUB_REPO="carl-system"       
+GITHUB_USERNAME="your-username"  # << VÁLTOZTASD MEG!
+GITHUB_REPO="carl-system"        # << VÁLTOZTASD MEG!
 
 echo "═══════════════════════════════════════════════════════════"
 echo "🇭🇺 CARL - Magyar Szív Kártya Projekt Setup"
