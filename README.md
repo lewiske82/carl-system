@@ -1,4 +1,4 @@
-# 🇭🇺 CARL & Magyar Szív Kártya Rendszer
+# 🇭🇺 CARL MI Asszisztens & Magyar Szív Kártya Rendszer
 
 <div align="center">
 
@@ -262,7 +262,7 @@ GET    /api/v1/nft/soulbound/:userId    - NFT lekérdezés
 
 ```bash
 # Klónozás
-git clone https://github.com/magyar-kormany/carl-system.git
+git clone https://github.com/lewiske82/carl-system.git
 cd carl-system
 
 # Environment változók beállítása
@@ -546,7 +546,7 @@ Authorization: Bearer {token}
 
 ## 👥 Fejlesztői Csapat
 
-### Agent Csapatok
+### Agent Csapatok DömAItech & AI DPK
 
 | Agent | Felelősség | Status |
 |-------|-----------|--------|
@@ -559,22 +559,22 @@ Authorization: Bearer {token}
 | Database Agent | Schema, optimization | ✅ Működik |
 | DevOps Agent | Deployment, monitoring | ✅ Működik |
 | Legal Agent | GDPR, szerzői jog | 🟡 Review alatt |
-
+| System Write & Director |Dömös László Krisztián |
 ---
 
 ## 📞 Kapcsolat & Support
 
-**Hivatalos honlap:** https://magyarszivcartya.hu  
+**Hivatalos honlap:** https://linkedin.com/groups/15095046/ 
 **API Dokumentáció:** https://docs.magyarszivcartya.hu  
-**Support Email:** support@magyarszivcartya.hu  
-**Bug Report:** https://github.com/magyar-kormany/carl-system/issues
-
+**Support Email:** domoslaszlokrisztian@gmail.com  
+**Bug Report:** https://github.com/lewiske82/carl-system/issues
+**Telefon:** +36301800900
 ---
 
 ## 📄 Licenc
 
 ```
-Copyright © 2025 Magyar Kormány - Digitális Átláthatósági Protokoll
+Copyright © 2025 Dömös László Krisztián E.v a Magyar Kormány számára - Digitális Átláthatósági Protokoll
 Minden jog fenntartva.
 
 Ez a szoftver kizárólag engedéllyel használható.
@@ -590,7 +590,8 @@ Köszönet a következő projekteknek és közösségeknek:
 - OpenZeppelin
 - Anthropic (Claude AI fejlesztés támogatás)
 - Magyar Szellemi Tulajdon Hivatala
-
+- Harcosok Klubja
+- Digitális Polgári Közösség
 ---
 
 <div align="center">
