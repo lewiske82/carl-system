@@ -8,7 +8,7 @@
 ![GDPR](https://img.shields.io/badge/GDPR-Compliant-green)
 
 **Cognitive Archive & Relational Legacy**  
-**Digitális Átláthatósági Protokoll (DÁP)**  
+**Digitális Átláthatósági Protokoll (iDÁP)**  
 **Magyar Szív Kártya - Kiegészítő Személyazonosító Rendszer**
 
 </div>
