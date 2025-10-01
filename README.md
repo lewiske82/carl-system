@@ -1,4 +1,4 @@
-# 🇭🇺 CARL - Magyar Szív Kártya Rendszer
+# 🇭🇺 CARL & Magyar Szív Kártya Rendszer
 
 <div align="center">
 
