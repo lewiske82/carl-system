@@ -1,0 +1,58 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  given_name     String?
+  family_name    String?
+  birth_date     DateTime?
+  dap_uid        String?  @unique
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  Sessions       Session[]
+  DapIdentities  DapIdentity[]
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  user_id      String
+  status       String   @default("CONFIRMED")
+  ip_address   String?
+  user_agent   String?
+  created_at   DateTime @default(now())
+  expires_at   DateTime?
+  last_auth_at DateTime?
+
+  User User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}
+
+model DapIdentity {
+  id            String   @id @default(uuid())
+  user_id       String
+  dap_uid       String   @unique
+  nft_hash      String?
+  verified_at   DateTime?
+  status        String   @default("PENDING")
+  attributes    Json?
+  consent_log   Json?
+  created_at    DateTime @default(now())
+
+  User User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}
+
+model DapAudit {
+  id          String   @id @default(uuid())
+  dap_uid     String
+  action      String
+  ip_address  String?
+  metadata    Json?
+  created_at  DateTime @default(now())
+}
