@@ -1,0 +1,33 @@
+feat(dap+supabase): DÁP eAzonosítás integráció és Supabase támogatás bevezetése
+
+Változások:
+- Új DÁP endpointok: POST /dap/login, GET /dap/callback, GET /dap/attributes
+- Supabase kliens és segédfüggvények (saveDapIdentity, auditDapEvent) bekötése
+- Broker JWT token kiadása a DÁP prezentáció sikeres verifikációja után
+- Attribútumok lekérdezése a saját adattárból (dap_identities), audit naplózás
+- Környezeti változók: DAP_IDP_AUTH_URL, DAP_IDP_TOKEN_URL, DAP_IDP_PRESENTATION_URL,
+  PUBLIC_BASE_URL, SUPABASE_URL, SUPABASE_ANON_KEY / SERVICE_ROLE, JWT_SECRET
+
+Miért volt szükséges?
+- A CARL ökoszisztéma a Magyarországi DÁP (Digitális Állampolgárság Program) hivatalos
+  eAzonosítására támaszkodik. A felhasználói azonosítás így állami szintű, hiteles és auditált.
+- A Supabase Postgres + RLS biztosítja, hogy a személyes adatok hozzáférése szabályozott és
+  naplózott legyen, a kliensben ne legyen titok.
+
+Biztonság:
+- A DÁP prezentáció aláírásának ellenőrzése a végleges verzióban a DÁP trust listák/JWK-k alapján történik.
+- A Service Role kulcs kizárólag Edge Functions/Backend oldalon használatos. Kliensbe tiltott.
+- GDPR-kompatibilis audit: minden attribútum-hozzáférés `dap_audit` táblába loggolódik.
+
+Telepítés/konfiguráció:
+- Állítsd be az .env-ben a Supabase és DÁP IDP URL-eket/kulcsokat.
+- Futtasd a DÁP táblákhoz tartozó SQL-t (dap_identities, dap_audit) és RLS policy-ket.
+- Deployold az Edge Function-öket (dap-login, dap-callback, dap-verify), ha ezt az utat választod.
+
+Teszt:
+- /dap/login visszaad auth_url + state
+- /dap/callback mock prezentációt fogad, broker JWT-t ad vissza
+- /dap/attributes a broker tokennel hívható, demo attribútumokat ad
+- E2E: manuális flow teszt és audit ellenőrzés a Supabase Console-ban (dap_identities, dap_audit)
+
+Dátum: 2025-10-16 12:25:36Z
